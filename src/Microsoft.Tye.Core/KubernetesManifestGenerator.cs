@@ -5,6 +5,7 @@
 using System;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -12,15 +13,25 @@ namespace Microsoft.Tye
 {
     internal static class KubernetesManifestGenerator
     {
-        public static KubernetesIngressOutput CreateIngress(
+        private static System.Version MinIngressVersion = new System.Version(1, 19);
+
+        public static async Task<KubernetesIngressOutput> CreateIngress(
             OutputContext output,
             ApplicationBuilder application,
             IngressBuilder ingress)
         {
             var root = new YamlMappingNode();
+            var k8sVersion = await KubectlDetector.GetKubernetesServerVersion(output);
 
             root.Add("kind", "Ingress");
-            root.Add("apiVersion", "extensions/v1beta1");
+            if (k8sVersion >= MinIngressVersion)
+            {
+                root.Add("apiVersion", "networking.k8s.io/v1");
+            }
+            else
+            {
+                root.Add("apiVersion", "extensions/v1beta1");
+            }
 
             var metadata = new YamlMappingNode();
             root.Add("metadata", metadata);
@@ -42,59 +53,85 @@ namespace Microsoft.Tye
             var spec = new YamlMappingNode();
             root.Add("spec", spec);
 
-            if (ingress.Rules.Count > 0)
+            if (ingress.Rules.Count == 0)
             {
-                var rules = new YamlSequenceNode();
-                spec.Add("rules", rules);
+                return new KubernetesIngressOutput(ingress.Name, new YamlDocument(root));
+            }
 
-                // k8s ingress is grouped by host first, then grouped by path
-                foreach (var hostgroup in ingress.Rules.GroupBy(r => r.Host))
+            var rules = new YamlSequenceNode();
+            spec.Add("rules", rules);
+
+            // k8s ingress is grouped by host first, then grouped by path
+            foreach (var hostgroup in ingress.Rules.GroupBy(r => r.Host))
+            {
+                var rule = new YamlMappingNode();
+                rules.Add(rule);
+
+                if (!string.IsNullOrEmpty(hostgroup.Key))
                 {
-                    var rule = new YamlMappingNode();
-                    rules.Add(rule);
+                    rule.Add("host", hostgroup.Key);
+                }
 
-                    if (!string.IsNullOrEmpty(hostgroup.Key))
+                var http = new YamlMappingNode();
+                rule.Add("http", http);
+
+                var paths = new YamlSequenceNode();
+                http.Add("paths", paths);
+
+                foreach (var ingressRule in hostgroup)
+                {
+                    var path = new YamlMappingNode();
+                    paths.Add(path);
+
+                    var backend = new YamlMappingNode();
+                    path.Add("backend", backend);
+
+                    var service = application.Services.FirstOrDefault(s => s.Name == ingressRule.Service);
+                    if (service is null)
                     {
-                        rule.Add("host", hostgroup.Key);
+                        throw new InvalidOperationException($"Could not resolve service '{ingressRule.Service}'.");
                     }
 
-                    var http = new YamlMappingNode();
-                    rule.Add("http", http);
-
-                    var paths = new YamlSequenceNode();
-                    http.Add("paths", paths);
-
-                    foreach (var ingressRule in hostgroup)
+                    var binding = service.Bindings.FirstOrDefault(b => b.Name is null || b.Name == "http");
+                    if (binding is null)
                     {
-                        var path = new YamlMappingNode();
-                        paths.Add(path);
+                        throw new InvalidOperationException($"Could not resolve an http binding for service '{service.Name}'.");
+                    }
 
-                        var backend = new YamlMappingNode();
-                        path.Add("backend", backend);
+                    if (k8sVersion >= MinIngressVersion)
+                    {
+                        var backendService = new YamlMappingNode();
+                        backend.Add("service", backendService);
+
+                        backendService.Add("name", ingressRule.Service);
+
+                        var backendPort = new YamlMappingNode();
+
+                        backendService.Add("port", backendPort);
+
+                        backendPort.Add("number", (binding.Port ?? 80).ToString(CultureInfo.InvariantCulture));
+                        path.Add("pathType", "Prefix");
+                    }
+                    else
+                    {
                         backend.Add("serviceName", ingressRule.Service);
-
-                        var service = application.Services.FirstOrDefault(s => s.Name == ingressRule.Service);
-                        if (service is null)
-                        {
-                            throw new InvalidOperationException($"Could not resolve service '{ingressRule.Service}'.");
-                        }
-
-                        var binding = service.Bindings.FirstOrDefault(b => b.Name is null || b.Name == "http");
-                        if (binding is null)
-                        {
-                            throw new InvalidOperationException($"Could not resolve an http binding for service '{service.Name}'.");
-                        }
-
                         backend.Add("servicePort", (binding.Port ?? 80).ToString(CultureInfo.InvariantCulture));
+                    }
 
-                        // Tye implements path matching similar to this example:
-                        // https://kubernetes.github.io/ingress-nginx/examples/rewrite/
-                        //
-                        // Therefore our rewrite-target is set to $2 - we want to make sure we have
-                        // two capture groups.
-                        if (string.IsNullOrEmpty(ingressRule.Path) || ingressRule.Path == "/")
+                    // Tye implements path matching similar to this example:
+                    // https://kubernetes.github.io/ingress-nginx/examples/rewrite/
+                    //
+                    // Therefore our rewrite-target is set to $2 - we want to make sure we have
+                    // two capture groups.
+                    if (string.IsNullOrEmpty(ingressRule.Path) || ingressRule.Path == "/")
+                    {
+                        path.Add("path", "/()(.*)"); // () is an empty capture group.
+                    }
+                    else
+                    {
+                        if (ingressRule.PreservePath)
                         {
-                            path.Add("path", "/()(.*)"); // () is an empty capture group.
+                            path.Add("path", $"/()({ingressRule.Path.Trim('/')}.*)");
                         }
                         else
                         {
@@ -102,6 +139,8 @@ namespace Microsoft.Tye
                             path.Add("path", regex);
                         }
                     }
+
+                    // Only support prefix matching for now
                 }
             }
 
@@ -175,16 +214,18 @@ namespace Microsoft.Tye
                     continue;
                 }
 
-                if (binding.Port != null)
+                if (binding.Port == null)
                 {
-                    var port = new YamlMappingNode();
-                    ports.Add(port);
-
-                    port.Add("name", binding.Name ?? binding.Protocol ?? "http");
-                    port.Add("protocol", "TCP"); // we use assume TCP. YOLO
-                    port.Add("port", binding.Port.Value.ToString());
-                    port.Add("targetPort", binding.Port.Value.ToString());
+                    continue;
                 }
+
+                var port = new YamlMappingNode();
+                ports.Add(port);
+
+                port.Add("name", binding.Name ?? binding.Protocol ?? "http");
+                port.Add("protocol", "TCP"); // we use assume TCP. YOLO
+                port.Add("port", binding.Port.Value.ToString());
+                port.Add("targetPort", (binding.ContainerPort ?? binding.Port.Value).ToString());
             }
 
             return new KubernetesServiceOutput(project.Name, new YamlDocument(root));
@@ -198,10 +239,11 @@ namespace Microsoft.Tye
         {
             var bindings = project.Outputs.OfType<ComputedBindings>().FirstOrDefault();
 
-            var root = new YamlMappingNode();
-
-            root.Add("kind", "Deployment");
-            root.Add("apiVersion", "apps/v1");
+            var root = new YamlMappingNode
+            {
+                {"kind", "Deployment"},
+                {"apiVersion", "apps/v1"}
+            };
 
             var metadata = new YamlMappingNode();
             root.Add("metadata", metadata);
@@ -336,7 +378,7 @@ namespace Microsoft.Tye
                         });
                     }
 
-                    if (bindings is object)
+                    if (bindings != null)
                     {
                         AddEnvironmentVariablesForComputedBindings(env, bindings);
                     }
@@ -370,12 +412,14 @@ namespace Microsoft.Tye
                             continue;
                         }
 
-                        if (binding.Port != null)
+                        if (binding.Port == null)
                         {
-                            var containerPort = new YamlMappingNode();
-                            ports.Add(containerPort);
-                            containerPort.Add("containerPort", binding.Port.Value.ToString());
+                            continue;
                         }
+
+                        var containerPort = new YamlMappingNode();
+                        ports.Add(containerPort);
+                        containerPort.Add("containerPort", (binding.ContainerPort ?? binding.Port.Value).ToString());
                     }
                 }
 
@@ -424,48 +468,51 @@ namespace Microsoft.Tye
                         });
                     }
 
-                    if (sidecarBindings is object)
+                    if (sidecarBindings != null)
                     {
                         AddEnvironmentVariablesForComputedBindings(env, sidecarBindings);
                     }
                 }
 
-                if (project.RelocateDiagnosticsDomainSockets)
+                if (!project.RelocateDiagnosticsDomainSockets)
                 {
-                    // volumeMounts:
-                    // - name: shared-data
-                    //   mountPath: /usr/share/nginx/html
-                    var volumeMounts = new YamlSequenceNode();
-                    container.Add("volumeMounts", volumeMounts);
-
-                    var volumeMount = new YamlMappingNode();
-                    volumeMounts.Add(volumeMount);
-                    volumeMount.Add("name", "tye-diagnostics");
-                    volumeMount.Add("mountPath", "/var/tye/diagnostics");
+                    continue;
                 }
-            }
 
-            if (project.RelocateDiagnosticsDomainSockets)
-            {
-                // volumes:
+                // volumeMounts:
                 // - name: shared-data
-                //   emptyDir: {}
-                var volumes = new YamlSequenceNode();
-                spec.Add("volumes", volumes);
+                //   mountPath: /usr/share/nginx/html
+                var volumeMounts = new YamlSequenceNode();
+                container.Add("volumeMounts", volumeMounts);
 
-                var volume = new YamlMappingNode();
-                volumes.Add(volume);
-                volume.Add("name", "tye-diagnostics");
-                volume.Add("emptyDir", new YamlMappingNode());
+                var volumeMount = new YamlMappingNode();
+                volumeMounts.Add(volumeMount);
+                volumeMount.Add("name", "tye-diagnostics");
+                volumeMount.Add("mountPath", "/var/tye/diagnostics");
             }
+
+            if (!project.RelocateDiagnosticsDomainSockets)
+            {
+                return new KubernetesDeploymentOutput(project.Name, new YamlDocument(root));
+            }
+            // volumes:
+            // - name: shared-data
+            //   emptyDir: {}
+            var volumes = new YamlSequenceNode();
+            spec.Add("volumes", volumes);
+
+            var volume = new YamlMappingNode();
+            volumes.Add(volume);
+            volume.Add("name", "tye-diagnostics");
+            volume.Add("emptyDir", new YamlMappingNode());
 
             return new KubernetesDeploymentOutput(project.Name, new YamlDocument(root));
         }
 
-        private static void AddProbe(ServiceBuilder service, YamlMappingNode container, ProbeBuilder builder, string name)
+        private static void AddProbe(ServiceBuilder service, YamlMappingNode container, ProbeBuilder builder, string probeName)
         {
             var probe = new YamlMappingNode();
-            container.Add(name, probe);
+            container.Add(probeName, probe);
 
             if (builder.Http != null)
             {
@@ -504,11 +551,13 @@ namespace Microsoft.Tye
                     var headers = new YamlSequenceNode();
                     httpGet.Add("httpHeaders", headers);
 
-                    foreach (var builderHeader in builderHttp.Headers)
+                    foreach (var (name, value) in builderHttp.Headers)
                     {
-                        var header = new YamlMappingNode();
-                        header.Add("name", builderHeader.Key);
-                        header.Add("value", builderHeader.Value.ToString()!);
+                        var header = new YamlMappingNode
+                        {
+                            {"name", name},
+                            {"value", value.ToString()!}
+                        };
                         headers.Add(header);
                     }
                 }
@@ -524,7 +573,7 @@ namespace Microsoft.Tye
         {
             foreach (var binding in bindings.Bindings.OfType<EnvironmentVariableInputBinding>())
             {
-                env.Add(new YamlMappingNode()
+                env.Add(new YamlMappingNode
                 {
                     { "name", binding.Name },
                     { "value", new YamlScalarNode(binding.Value) { Style = ScalarStyle.SingleQuoted, } },
@@ -539,16 +588,16 @@ namespace Microsoft.Tye
                 //      name: mysecret
                 //      key: username
 
-                if (binding is SecretConnectionStringInputBinding connectionStringBinding)
+                switch (binding)
                 {
-                    AddSecret(env, connectionStringBinding.KeyName, binding.Name, "connectionstring");
-
-                }
-                else if (binding is SecretUrlInputBinding urlBinding)
-                {
-                    AddSecret(env, $"{urlBinding.KeyNameBase}__PROTOCOL", binding.Name, "protocol");
-                    AddSecret(env, $"{urlBinding.KeyNameBase}__HOST", binding.Name, "host");
-                    AddSecret(env, $"{urlBinding.KeyNameBase}__PORT", binding.Name, "port");
+                    case SecretConnectionStringInputBinding connectionStringBinding:
+                        AddSecret(env, connectionStringBinding.KeyName, binding.Name, "connectionstring");
+                        break;
+                    case SecretUrlInputBinding urlBinding:
+                        AddSecret(env, $"{urlBinding.KeyNameBase}__PROTOCOL", binding.Name, "protocol");
+                        AddSecret(env, $"{urlBinding.KeyNameBase}__HOST", binding.Name, "host");
+                        AddSecret(env, $"{urlBinding.KeyNameBase}__PORT", binding.Name, "port");
+                        break;
                 }
             }
 

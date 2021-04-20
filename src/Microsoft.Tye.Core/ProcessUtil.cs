@@ -14,8 +14,14 @@ namespace Microsoft.Tye
 {
     public static class ProcessUtil
     {
+        #region Native Methods
+
         [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
         private static extern int sys_kill(int pid, int sig);
+
+        #endregion
+
+        private static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
         public static async Task<ProcessResult> RunAsync(
             string filename,
@@ -38,7 +44,8 @@ namespace Microsoft.Tye
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true,
+                    CreateNoWindow = !IsWindows,
+                    WindowStyle = ProcessWindowStyle.Hidden
                 },
                 EnableRaisingEvents = true
             };
@@ -59,32 +66,36 @@ namespace Microsoft.Tye
             var outputBuilder = new StringBuilder();
             process.OutputDataReceived += (_, e) =>
             {
-                if (e.Data != null)
+                if (e.Data == null)
                 {
-                    if (outputDataReceived != null)
-                    {
-                        outputDataReceived.Invoke(e.Data);
-                    }
-                    else
-                    {
-                        outputBuilder.AppendLine(e.Data);
-                    }
+                    return;
+                }
+
+                if (outputDataReceived != null)
+                {
+                    outputDataReceived.Invoke(e.Data);
+                }
+                else
+                {
+                    outputBuilder.AppendLine(e.Data);
                 }
             };
 
             var errorBuilder = new StringBuilder();
             process.ErrorDataReceived += (_, e) =>
             {
-                if (e.Data != null)
+                if (e.Data == null)
                 {
-                    if (errorDataReceived != null)
-                    {
-                        errorDataReceived.Invoke(e.Data);
-                    }
-                    else
-                    {
-                        errorBuilder.AppendLine(e.Data);
-                    }
+                    return;
+                }
+
+                if (errorDataReceived != null)
+                {
+                    errorDataReceived.Invoke(e.Data);
+                }
+                else
+                {
+                    errorBuilder.AppendLine(e.Data);
                 }
             };
 
@@ -92,6 +103,10 @@ namespace Microsoft.Tye
 
             process.Exited += (_, e) =>
             {
+                // Even though the Exited event has been raised, WaitForExit() must still be called to ensure the output buffers
+                // have been flushed before the process is considered completely done.
+                process.WaitForExit();
+
                 if (throwOnError && process.ExitCode != 0)
                 {
                     processLifetimeTask.TrySetException(new InvalidOperationException($"Command {filename} {arguments} returned exit code {process.ExitCode}"));
@@ -115,20 +130,23 @@ namespace Microsoft.Tye
 
             if (result == cancelledTcs.Task)
             {
-                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                if (!IsWindows)
                 {
                     sys_kill(process.Id, sig: 2); // SIGINT
-
-                    var cancel = new CancellationTokenSource();
-
-                    await Task.WhenAny(processLifetimeTask.Task, Task.Delay(TimeSpan.FromSeconds(5), cancel.Token));
-
-                    cancel.Cancel();
+                }
+                else
+                {
+                    if (!process.CloseMainWindow())
+                    {
+                        process.Kill();
+                    }
                 }
 
                 if (!process.HasExited)
                 {
-                    process.CloseMainWindow();
+                    var cancel = new CancellationTokenSource();
+                    await Task.WhenAny(processLifetimeTask.Task, Task.Delay(TimeSpan.FromSeconds(5), cancel.Token));
+                    cancel.Cancel();
 
                     if (!process.HasExited)
                     {

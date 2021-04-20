@@ -35,15 +35,12 @@ namespace Microsoft.Tye
                 throw new ArgumentNullException(nameof(pipeline));
             }
 
-            foreach (var kvp in callbacks)
+            foreach (var (type, delegates) in callbacks)
             {
-                var type = kvp.Key;
-                var delegates = kvp.Value;
-
                 var method = pipeline.GetType().GetMethod("Register")!.MakeGenericMethod(type);
-                for (var i = 0; i < delegates.Count; i++)
+                foreach (var @delegate in delegates)
                 {
-                    method.Invoke(pipeline, new[] { delegates[i], });
+                    method.Invoke(pipeline, new object?[] { @delegate });
                 }
             }
 

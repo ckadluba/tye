@@ -17,7 +17,7 @@ Want to learn more? Check out our [FAQ](docs/FAQ.md) or [documentation](docs/REA
 
 ## Current Status
 
-Project Tye is an open source experiment that will last at least until Nov 2020. We are using this time to try radical ideas to improve microservices developer productivity and see what works. 
+Project Tye is an open source experiment at the moment. We are using this time to try radical ideas to improve microservices developer productivity and see what works. 
 
 We plan to do releases with new features roughly every 4 weeks.
 
@@ -25,7 +25,7 @@ For the duration of the experiment, consider every part of the tye experience to
 
 ---
 
-[![Build Status](https://dnceng.visualstudio.com/public/_apis/build/status/dotnet/tye/dotnet-tye-ci-public?branchName=master)](https://dnceng.visualstudio.com/public/_build/latest?definitionId=796&branchName=master)
+[![Build Status](https://dnceng.visualstudio.com/public/_apis/build/status/dotnet/tye/dotnet-tye-ci-public?branchName=main)](https://dnceng.visualstudio.com/public/_build/latest?definitionId=796&branchName=main)
 
 
 ## Getting Started
@@ -35,8 +35,6 @@ See the getting started instructions and tutorials [here](/docs/getting_started.
 
 ## How to Engage, Contribute, and Give Feedback
 
-If you want a *low-spam* way to follow what the team is doing. We post a status update approximately every 2 weeks. You can find the issue [here](https://github.com/dotnet/tye/issues/251). Use the `Notifications` button to subscribe. Only team-members can post on this issue, so it's a good way to get a digest of what's happening without having to read every conversation.
-
 Some of the best ways to contribute are to try things out, file issues, join in design conversations, and make pull-requests.
 
 - Download our latest daily builds
@@ -45,6 +43,8 @@ Some of the best ways to contribute are to try things out, file issues, join in 
 - Log an issue if you have feedback you want to share with the team.
 
 Check out the [contributing](/CONTRIBUTING.md) page to see the best places to log issues and start discussions.
+
+Thank you for trying out Project Tye! We highly encourage you to provide feedback to help us continue to improve the tool, so we would love to learn more about your experience. Please let us know what you think by filling out our [survey](https://aka.ms/tyesurvey).
 
 ## Reporting security issues and bugs
 

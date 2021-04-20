@@ -8,13 +8,18 @@ This document will describe how to integrate a Dapr application with Tye. See Da
 
 ## Getting Started with Dapr
 
-Getting started documentation for Dapr can be found [here](https://github.com/dapr/docs/tree/master/getting-started)
+Getting started documentation for Dapr can be found [here](https://docs.dapr.io/getting-started/)
 
 ## Sample Code
 
-The sample code for document can be found [here](https://github.com/dotnet/tye/tree/master/samples/dapr).
+There are two sample projects for the Dapr recipe [here](https://github.com/dotnet/tye/tree/main/samples/dapr).
 
-This application has three services:
+They demonstrate
+
+- Pub/Sub (The sample code associated with the instructions below.)
+- Service Invocation
+
+The pub-sub sample application has three services:
 
 - A frontend application (`store`)
 - A products backend service (`products`)
@@ -22,15 +27,15 @@ This application has three services:
 
 These services use a variety of Dapr's features:
 
-- State Storate (`store`)
+- State Storage (`store`)
 - Invoke (`store`, `products`)
 - Pub/Sub (`store`, `orders`)
 
-You can find the Dapr component files [here](https://github.com/dotnet/tye/tree/master/samples/dapr/components).
+You can find the Dapr component files for the sample project [here](https://github.com/dotnet/tye/tree/main/samples/dapr/pub-sub/components).
 
 ## Running the sample locally
 
-To run this sample, simply go to the `samples/dapr` directory and run the following command:
+To run this sample, simply go to the `samples/dapr/pub-sub` directory and run the following command:
 
 ```sh
 tye run
@@ -46,7 +51,7 @@ When the application runs, you should be able to see something like the followin
 
 When using `tye run` in this way, Dapr discover components like redis for state storage and pubsub from the `components` directory next to the solution.
 
-> :warning: You may encounter a port conflict for redis if you have already used `dapr --init` locally to start redis. This will likely be visible as a high never of restarts for the redis service in the dashboard. You can either use `dapr` to manage redis or `tye`, but not both. To work around this remove the `redis` service from `tye.yaml`.  
+> :warning: You may encounter a port conflict for redis if you have already used `dapr --init` locally to start redis. This will likely be visible as a high number of restarts for the redis service in the dashboard. You can either use `dapr` to manage redis or `tye`, but not both. To work around this remove the `redis` service from `tye.yaml`.  
 
 ---
 
@@ -65,7 +70,7 @@ Each application would need to be given a unique port to listen on, and launched
 Tye has built-in support that can make this more productive by:
 
 - Launching everything at once
-- Automatically manging ports
+- Automatically managing ports
 
 Tye's Dapr integration is activated in `tye.yaml` (seen below for this sample):
 
@@ -83,7 +88,7 @@ services:
 - name: redis
   image: redis
   bindings:
-    - port: 6973
+    - port: 6379
 ``` 
 
 All that's needed to enable Dapr integration for an application is:

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.IO;
 
 namespace Microsoft.Tye
@@ -10,19 +11,29 @@ namespace Microsoft.Tye
     {
         // Calling Directory.Delete causes an exception for .git folders:
         //     System.UnauthorizedAccessException : Access to the path '17a475ecca365c678e907bd4c73e4c65b341c6' is denied.
-        public static void DeleteDirectory(string d)
+        public static void DeleteDirectory(string directoryPath)
         {
-            foreach (var sub in Directory.EnumerateDirectories(d))
+            foreach (var subDirectoryPath in Directory.EnumerateDirectories(directoryPath))
             {
-                DeleteDirectory(sub);
+                DeleteDirectory(subDirectoryPath);
             }
-            foreach (var f in Directory.EnumerateFiles(d))
+
+            try
             {
-                var fi = new FileInfo(f);
-                fi.Attributes = FileAttributes.Normal;
-                fi.Delete();
+                foreach (var filePath in Directory.EnumerateFiles(directoryPath))
+                {
+                    var fileInfo = new FileInfo(filePath)
+                    {
+                        Attributes = FileAttributes.Normal
+                    };
+                    fileInfo.Delete();
+                }
+                Directory.Delete(directoryPath);
             }
-            Directory.Delete(d);
+            catch (Exception e)
+            {
+                Console.WriteLine($@"Failed to delete directory {directoryPath}: {e.Message}");
+            }
         }
     }
 }

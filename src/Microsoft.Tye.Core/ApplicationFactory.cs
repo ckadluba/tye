@@ -4,9 +4,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Tye.ConfigModel;
 
@@ -14,7 +17,7 @@ namespace Microsoft.Tye
 {
     public static class ApplicationFactory
     {
-        public static async Task<ApplicationBuilder> CreateAsync(OutputContext output, FileInfo source, ApplicationFactoryFilter? filter = null)
+        public static async Task<ApplicationBuilder> CreateAsync(OutputContext output, FileInfo source, string? framework = null, ApplicationFactoryFilter? filter = null)
         {
             if (source is null)
             {
@@ -27,18 +30,18 @@ namespace Microsoft.Tye
             var rootConfig = ConfigFactory.FromFile(source);
             rootConfig.Validate();
 
-            var root = new ApplicationBuilder(source, rootConfig.Name!);
-            root.Namespace = rootConfig.Namespace;
+            var root = new ApplicationBuilder(source, rootConfig.Name!)
+            {
+                Namespace = rootConfig.Namespace
+            };
 
             queue.Enqueue((rootConfig, new HashSet<string>()));
 
-            while (queue.Count > 0)
+            while (queue.TryDequeue(out var item))
             {
-                var item = queue.Dequeue();
-                var config = item.Item1;
-
                 // dependencies represents a set of all dependencies
-                var dependencies = item.Item2;
+                var (config, dependencies) = item;
+
                 if (!visited.Add(config.Source.FullName))
                 {
                     continue;
@@ -74,6 +77,80 @@ namespace Microsoft.Tye
                     config.Services.Where(filter.ServicesFilter).ToList() :
                     config.Services;
 
+                var sw = Stopwatch.StartNew();
+                // Project services will be restored and evaluated before resolving all other services.
+                // This batching will mitigate the performance cost of running MSBuild out of process.
+                var projectServices = services.Where(s => !string.IsNullOrEmpty(s.Project));
+                var projectMetadata = new Dictionary<string, string>();
+
+                var msbuildEvaluationResult = await EvaluateProjectsAsync(
+                    projects: projectServices,
+                    configRoot: config.Source.DirectoryName!,
+                    output: output);
+                var msbuildEvaluationOutput = msbuildEvaluationResult
+                    .StandardOutput
+                    .Split(Environment.NewLine);
+
+                var multiTFMProjects = new List<ConfigService>();
+
+                foreach (var line in msbuildEvaluationOutput)
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("Microsoft.Tye metadata: "))
+                    {
+                        var values = line.Split(':', 3);
+                        var projectName = values[1].Trim();
+                        var metadataPath = values[2].Trim();
+                        projectMetadata.Add(projectName, metadataPath);
+
+                        output.WriteDebugLine($"Resolved metadata for service {projectName} at {metadataPath}");
+                    }
+                    else if (trimmed.StartsWith("Microsoft.Tye cross-targeting project: "))
+                    {
+                        var values = line.Split(':', 2);
+                        var projectName = values[1].Trim();
+
+                        var multiTFMConfigService = projectServices.First(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase));
+                        multiTFMConfigService.BuildProperties.Add(new BuildProperty { Name = "TargetFramework", Value = framework ?? string.Empty });
+                        multiTFMProjects.Add(multiTFMConfigService);
+                    }
+                }
+
+                if (multiTFMProjects.Any())
+                {
+                    output.WriteDebugLine("Re-evaluating multi-targeted projects");
+
+                    var multiTFMEvaluationResult = await EvaluateProjectsAsync(
+                        projects: multiTFMProjects,
+                        configRoot: config.Source.DirectoryName!,
+                        output: output);
+                    var multiTFMEvaluationOutput = multiTFMEvaluationResult
+                        .StandardOutput
+                        .Split(Environment.NewLine);
+
+                    foreach (var line in multiTFMEvaluationOutput)
+                    {
+                        var trimmed = line.Trim();
+                        if (trimmed.StartsWith("Microsoft.Tye metadata: "))
+                        {
+                            var values = line.Split(':', 3);
+                            var projectName = values[1].Trim();
+                            var metadataPath = values[2].Trim();
+                            projectMetadata.Add(projectName, metadataPath);
+
+                            output.WriteDebugLine($"Resolved metadata for service {projectName} at {metadataPath}");
+                        }
+                        else if (trimmed.StartsWith("Microsoft.Tye cross-targeting project: "))
+                        {
+                            var values = line.Split(':', 2);
+                            var projectName = values[1].Trim();
+                            throw new CommandException($"Unable to run {projectName}. Your project targets multiple frameworks. Specify which framework to run using '--framework' or a build property in tye.yaml.");
+                        }
+                    }
+                }
+
+                output.WriteDebugLine($"Restore and project evaluation took: {sw.Elapsed.TotalMilliseconds}ms");
+
                 foreach (var configService in services)
                 {
                     ServiceBuilder service;
@@ -87,9 +164,7 @@ namespace Microsoft.Tye
 
                     if (!string.IsNullOrEmpty(configService.Project))
                     {
-                        var expandedProject = Environment.ExpandEnvironmentVariables(configService.Project);
-                        var projectFile = new FileInfo(Path.Combine(config.Source.DirectoryName!, expandedProject));
-                        var project = new DotnetProjectServiceBuilder(configService.Name!, projectFile);
+                        var project = new DotnetProjectServiceBuilder(configService.Name!, new FileInfo(configService.ProjectFullPath));
                         service = project;
 
                         project.Build = configService.Build ?? true;
@@ -98,8 +173,8 @@ namespace Microsoft.Tye
                         {
                             project.BuildProperties.Add(buildProperty.Name, buildProperty.Value);
                         }
-                        project.Replicas = configService.Replicas ?? 1;
 
+                        project.Replicas = configService.Replicas ?? 1;
                         project.Liveness = configService.Liveness != null ? GetProbeBuilder(configService.Liveness) : null;
                         project.Readiness = configService.Readiness != null ? GetProbeBuilder(configService.Readiness) : null;
 
@@ -107,7 +182,13 @@ namespace Microsoft.Tye
                         // to prompt for the registry name.
                         project.ContainerInfo = new ContainerInfo() { UseMultiphaseDockerfile = false, };
 
-                        await ProjectReader.ReadProjectDetailsAsync(output, project);
+                        // If project evaluation is successful this should not happen, therefore an exception will be thrown.
+                        if (!projectMetadata.ContainsKey(configService.Name))
+                        {
+                            throw new CommandException($"Evaluated project metadata file could not be found for service {configService.Name}");
+                        }
+
+                        ProjectReader.ReadProjectDetails(output, project, projectMetadata[configService.Name]);
 
                         // Do k8s by default.
                         project.ManifestInfo = new KubernetesManifestInfo();
@@ -186,13 +267,13 @@ namespace Microsoft.Tye
                     else if (!string.IsNullOrEmpty(configService.Repository))
                     {
                         // clone to .tye folder
-                        var path = configService.CloneDirectory ?? Path.Join(rootConfig.Source.DirectoryName, ".tye", "deps");
+                        var path = configService.CloneDirectory ?? Path.Join(".tye", "deps");
                         if (!Directory.Exists(path))
                         {
                             Directory.CreateDirectory(path);
                         }
 
-                        var clonePath = Path.Combine(path, configService.Name);
+                        var clonePath = Path.Combine(rootConfig.Source.DirectoryName!, path, configService.Name);
 
                         if (!Directory.Exists(clonePath))
                         {
@@ -201,7 +282,7 @@ namespace Microsoft.Tye
                                 throw new CommandException($"Cannot clone repository {configService.Repository} because git is not installed. Please install git if you'd like to use \"repository\" in tye.yaml.");
                             }
 
-                            var result = await ProcessUtil.RunAsync("git", $"clone {configService.Repository} {clonePath}", workingDirectory: path, throwOnError: false);
+                            var result = await ProcessUtil.RunAsync("git", $"clone {configService.Repository} \"{clonePath}\"", workingDirectory: rootConfig.Source.DirectoryName, throwOnError: false);
 
                             if (result.ExitCode != 0)
                             {
@@ -384,6 +465,7 @@ namespace Microsoft.Tye
                         {
                             Host = configRule.Host,
                             Path = configRule.Path,
+                            PreservePath = configRule.PreservePath,
                             Service = configRule.Service!, // validated elsewhere
                         };
                         ingress.Rules.Add(rule);
@@ -392,6 +474,74 @@ namespace Microsoft.Tye
             }
 
             return root;
+        }
+
+        private static async Task<ProcessResult> EvaluateProjectsAsync(IEnumerable<ConfigService> projects, string configRoot, OutputContext output)
+        {
+            using var directory = TempDirectory.Create();
+            var projectPath = Path.Combine(directory.DirectoryPath, Path.GetRandomFileName() + ".proj");
+
+            var sb = new StringBuilder();
+            sb.AppendLine("<Project>");
+            sb.AppendLine("    <ItemGroup>");
+
+            foreach (var project in projects)
+            {
+                var expandedProject = Environment.ExpandEnvironmentVariables(project.Project!);
+                project.ProjectFullPath = Path.Combine(configRoot, expandedProject);
+
+                if (!File.Exists(project.ProjectFullPath))
+                {
+                    throw new CommandException($"Failed to locate project: '{project.ProjectFullPath}'.");
+                }
+
+                sb.AppendLine($"        <MicrosoftTye_ProjectServices " +
+                    $"Include=\"{project.ProjectFullPath}\" " +
+                    $"Name=\"{project.Name}\" " +
+                    $"BuildProperties=\"" +
+                        $"{(project.BuildProperties.Any() ? project.BuildProperties.Select(kvp => $"{kvp.Name}={kvp.Value}").Aggregate((a, b) => a + ";" + b) : string.Empty)}" +
+                    $"\" />");
+            }
+            sb.AppendLine(@"    </ItemGroup>");
+
+            sb.AppendLine($@"    <Target Name=""MicrosoftTye_EvaluateProjects"">");
+            sb.AppendLine($@"        <MsBuild Projects=""@(MicrosoftTye_ProjectServices)"" "
+                + $@"Properties=""%(BuildProperties);"
+                + $@"MicrosoftTye_ProjectName=%(Name)"" "
+                + $@"Targets=""MicrosoftTye_GetProjectMetadata"" BuildInParallel=""true"" />");
+
+            sb.AppendLine("    </Target>");
+            sb.AppendLine("</Project>");
+            File.WriteAllText(projectPath, sb.ToString());
+
+            output.WriteDebugLine("Restoring and evaluating projects");
+
+            var projectEvaluationTargets = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "ProjectEvaluation.targets");
+            var msbuildEvaluationResult = await ProcessUtil.RunAsync(
+                "dotnet",
+                $"build " +
+                    $"\"{projectPath}\" " +
+                    // CustomAfterMicrosoftCommonTargets is imported by non-crosstargeting (single TFM) projects
+                    @$"/p:CustomAfterMicrosoftCommonTargets=""{projectEvaluationTargets}"" " +
+                    // CustomAfterMicrosoftCommonCrossTargetingTargets is imported by crosstargeting (multi-TFM) projects
+                    // This ensures projects properties are evaluated correctly. However, multi-TFM projects must specify
+                    // a specific TFM to build/run/publish and will otherwise throw an exception.
+                    @$"/p:CustomAfterMicrosoftCommonCrossTargetingTargets=""{projectEvaluationTargets}"" " +
+                    $"/nologo",
+                throwOnError: false,
+                workingDirectory: directory.DirectoryPath);
+
+            // If the build fails, we're not really blocked from doing our work.
+            // For now we just log the output to debug. There are errors that occur during
+            // running these targets we don't really care as long as we get the data.
+            if (msbuildEvaluationResult.ExitCode != 0)
+            {
+                output.WriteInfoLine($"Evaluating project failed with exit code {msbuildEvaluationResult.ExitCode}");
+                output.WriteDebugLine($"Ouptut: {msbuildEvaluationResult.StandardOutput}");
+                output.WriteDebugLine($"Error: {msbuildEvaluationResult.StandardError}");
+            }
+
+            return msbuildEvaluationResult;
         }
 
         private static string? GetDockerFileContext(FileInfo source, ConfigService configService)

@@ -53,22 +53,25 @@ namespace Microsoft.Tye.Hosting
             var proxies = new List<Service>();
             foreach (var service in application.Services.Values)
             {
-                if (service.Description.RunInfo is DockerRunInfo || service.Description.Bindings.Count == 0)
+                if (service.Description.RunInfo is DockerRunInfo ||
+                    service.Description.RunInfo is IngressRunInfo ||
+                    service.Description.Bindings.Count == 0)
                 {
                     continue;
                 }
 
                 // Inject a proxy per non-container service. This allows the container to use normal host names within the
                 // container network to talk to services on the host
-                var proxyContanier = new DockerRunInfo($"mcr.microsoft.com/dotnet/core/sdk:3.1", "dotnet Microsoft.Tye.Proxy.dll")
+                var proxyContainer = new DockerRunInfo($"mcr.microsoft.com/dotnet/core/sdk:3.1", "dotnet Microsoft.Tye.Proxy.dll")
                 {
                     WorkingDirectory = "/app",
                     NetworkAlias = service.Description.Name,
-                    Private = true
+                    Private = true,
+                    IsProxy = true
                 };
                 var proxyLocation = Path.GetDirectoryName(typeof(Microsoft.Tye.Proxy.Program).Assembly.Location);
-                proxyContanier.VolumeMappings.Add(new DockerVolume(proxyLocation, name: null, target: "/app"));
-                var proxyDescription = new ServiceDescription($"{service.Description.Name}-proxy", proxyContanier);
+                proxyContainer.VolumeMappings.Add(new DockerVolume(proxyLocation, name: null, target: "/app"));
+                var proxyDescription = new ServiceDescription($"{service.Description.Name}-proxy", proxyContainer);
                 foreach (var binding in service.Description.Bindings)
                 {
                     if (binding.Port == null)
@@ -88,9 +91,9 @@ namespace Microsoft.Tye.Hosting
                     b.ReplicaPorts.Add(b.Port.Value);
                     proxyDescription.Bindings.Add(b);
                 }
-                var proxyContanierService = new Service(proxyDescription);
-                containers.Add(proxyContanierService);
-                proxies.Add(proxyContanierService);
+                var proxyContainerService = new Service(proxyDescription);
+                containers.Add(proxyContainerService);
+                proxies.Add(proxyContainerService);
             }
 
             string? dockerNetwork = null;
@@ -201,7 +204,7 @@ namespace Microsoft.Tye.Hosting
             var serviceDescription = service.Description;
             var environmentArguments = "";
             var volumes = "";
-            var workingDirectory = docker.WorkingDirectory != null ? $"-w {docker.WorkingDirectory}" : "";
+            var workingDirectory = docker.WorkingDirectory != null ? $"-w \"{docker.WorkingDirectory}\"" : "";
             var hostname = "host.docker.internal";
             var dockerImage = docker.Image ?? service.Description.Name;
 
@@ -293,7 +296,14 @@ namespace Microsoft.Tye.Hosting
 
                 var command = $"run -d {workingDirectory} {volumes} {environmentArguments} {portString} --name {replica} --restart=unless-stopped {dockerImage} {docker.Args ?? ""}";
 
-                _logger.LogInformation("Running image {Image} for {Replica}", docker.Image, replica);
+                if (!docker.IsProxy)
+                {
+                    _logger.LogInformation("Running image {Image} for {Replica}", docker.Image, replica);
+                }
+                else
+                {
+                    _logger.LogDebug("Running proxy image {Image} for {Replica}", docker.Image, replica);
+                }
 
                 service.Logs.OnNext($"[{replica}]: docker {command}");
 

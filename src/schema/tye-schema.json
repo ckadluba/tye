@@ -464,6 +464,10 @@
                 "host": {
                     "description": "The hostname to match.",
                     "type": "string"
+                },
+                "preservePath": {
+                    "description": "Whether to keep the path that was originally present or not after a prefix match.",
+                    "type": "boolean"
                 }
             },
             "required": [

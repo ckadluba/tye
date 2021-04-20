@@ -193,14 +193,14 @@ The pattern for a default binding on the `postgres` service:
 
 |                   | Environment Variable         | Configuration Key          |
 |-------------------|------------------------------|----------------------------|
-| Connection String | `CONNECTIONSTRING__POSTGRES` | `connectionstrings:postgres` |
+| Connection String | `CONNECTIONSTRINGS__POSTGRES` | `connectionstrings:postgres` |
 
 
 The pattern for a named binding called `myBinding` on the `postgres` service:
 
 |                   | Environment Variable         | Configuration Key          |
 |-------------------|------------------------------|----------------------------|
-| Connection String | `CONNECTIONSTRING__POSTGRES__MYBINDING` | `connectionstrings:postgres:mybinding` |
+| Connection String | `CONNECTIONSTRINGS__POSTGRES__MYBINDING` | `connectionstrings:postgres:mybinding` |
 
 > :bulb: That's a double-underscore (`__`) in the environment variables. The `Microsoft.Extensions.Configuration` system uses double-underscore as a separator because single underscores are already common in environment variables.
 
@@ -226,13 +226,13 @@ We'll follow the example of the connection string for `postgres` is generated an
 
 1. The `postgres` service has a single binding with a hardcoded port. If the port was unspecified then Tye will assign each binding an available port (avoiding conflicts).
    
-2. Tye will substitute the values of `${host}` and `${port}` from the binding. Tye will substitue the value of `POSTGRES_PASSWORD` for `${env:POSTGRES_PASSWORD}`. The result is generate as the `CONNECTIONSTRINGS__POSTGRES` environment variable.
+2. Tye will substitute the values of `${host}` and `${port}` from the binding. Tye will substitue the value of `POSTGRES_PASSWORD` for `${env:POSTGRES_PASSWORD}`. The result is generated as the `CONNECTIONSTRINGS__POSTGRES` environment variable.
    
 3. Each service is given access to the environment variables that contain the bindings of the *other* services in the application. So `frontend` and `backend` both have access to each-other's bindings as well as the environment variable `CONNECTIONSTRINGS__POSTGRES`. The Tye host will provide these environment variables when launching application processes.
    
 4. On startup, the environment variable configuration source reads all environment variables and translates them to the config key format (see table above).
 
-5. When the application calls `GetConnectionString("postgres")`, the method will read the `connectionstrings:postgres` key and return the value.
+5. When the application calls `GetConnectionString("postgres")`, the method will read the `connectionstrings:postgres` key and return the value. For the case of the named binding, if the application calls `GetConnectionString("postgres:mybinding")`, the method will read the `connectionstrings:postgres:mybinding` key and return the value.
 
 ## How it works: Deployed applications
 
@@ -240,7 +240,7 @@ When deploying an application, Tye will deploy all of the containers built from 
 
 ---
 
-When deploying your .NET projects, Tye will use the environment variable format described above to to set environment variables on your pods and containers.
+When deploying your .NET projects, Tye will use the environment variable format described above to set environment variables on your pods and containers.
 
 To avoid hardcoding ephemeral details like pod names, Tye relies on Kubernetes Services. Each project gets its own Service, and the environment variables can refer to the hostname mapped to the service. 
 
@@ -250,7 +250,7 @@ This allows service discovery for URIs to work very simply in a deployed applica
 
 When an application contains a dependency (like Redis, or a Database), Tye will use Kubernetes Secret objects to store the connection string or URI.
 
-Tye will look for an existing secret based on the service and binding names. If the secret already exists then deployment will proceed.
+Tye will look for an existing secret based on the service and binding names. If the secret already exists, then deployment will proceed.
 
 If the secret does not exist, then Tye will prompt (in interactive mode) for the connection string or URI value. Based on whether it's a connection string or URI, Tye will create a secret like one of the following.
 
@@ -280,6 +280,6 @@ stringData:
   connectionstring: <redacted>
 ```
 
-Creating the secret is a one-time operation, and Tye will only prompt for it if it does not already exist. If desired you can use standard `kubectl` commands to update values or delete the secret and force it to be recreated.
+Creating the secret is a one-time operation, and Tye will only prompt for it if it does not already exist. If desired, you can use standard `kubectl` commands to update values or delete the secret and force it to be recreated.
 
 To get these values into the application, Tye will use environment variables that reference the Kubernetes secrets described above and will use the environment-variable naming scheme described above.

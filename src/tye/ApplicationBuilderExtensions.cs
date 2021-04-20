@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Tye.Extensions;
 using Microsoft.Tye.Hosting.Model;
@@ -120,11 +121,6 @@ namespace Microsoft.Tye
                 }
                 else if (service is DotnetProjectServiceBuilder project)
                 {
-                    if (project.TargetFrameworks.Length > 1)
-                    {
-                        throw new InvalidOperationException($"Unable to run {project.Name}. Multi-targeted projects are not supported.");
-                    }
-
                     if (project.RunCommand == null)
                     {
                         throw new InvalidOperationException($"Unable to run {project.Name}. The project does not have a run command");
@@ -194,7 +190,7 @@ namespace Microsoft.Tye
 
                 foreach (var rule in ingress.Rules)
                 {
-                    rules.Add(new IngressRule(rule.Host, rule.Path, rule.Service!));
+                    rules.Add(new IngressRule(rule.Host, rule.Path, rule.Service!, rule.PreservePath));
                 }
 
                 var runInfo = new IngressRunInfo(rules);

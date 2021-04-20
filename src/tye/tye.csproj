@@ -2,13 +2,17 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net5.0</TargetFramework>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
     <RootNamespace>Microsoft.Tye</RootNamespace>
     <AssemblyName>tye</AssemblyName>
     <PackageId>Microsoft.Tye</PackageId>
     <ToolCommandName>tye</ToolCommandName>
     <PackAsTool>true</PackAsTool>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="ProjectEvaluation.targets" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\shared\KubectlDetector.cs" Link="KubectlDetector.cs" />
@@ -23,7 +27,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta1.20104.2" />
-    <PackageReference Include="YamlDotNet" Version="8.0.0" />
+    <PackageReference Include="YamlDotNet" Version="8.1.2" />
   </ItemGroup>
 
 </Project>

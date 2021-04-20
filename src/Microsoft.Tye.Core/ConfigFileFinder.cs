@@ -8,27 +8,28 @@ namespace Microsoft.Tye
 {
     public class ConfigFileFinder
     {
-        private static readonly string[] FileFormats = new[] { "tye.yaml", "tye.yml", "*.csproj", "*.fsproj", "*.sln" };
+        private static readonly string[] FileFormats = { "tye.yaml", "tye.yml", "docker-compose.yaml", "docker-compose.yml", "*.csproj", "*.fsproj", "*.sln" };
 
-        public static bool TryFindSupportedFile(string directoryPath, out string? filePath, out string? errorMessage)
+        public static bool TryFindSupportedFile(string directoryPath, out string? filePath, out string? errorMessage, string[]? fileFormats = null)
         {
-            foreach (var format in FileFormats)
+            fileFormats ??= FileFormats;
+            foreach (var format in fileFormats)
             {
                 var files = Directory.GetFiles(directoryPath, format);
 
-                if (files.Length == 1)
+                switch (files.Length)
                 {
-                    errorMessage = null;
-                    filePath = files[0];
-                    return true;
+                    case 1:
+                        errorMessage = null;
+                        filePath = files[0];
+                        return true;
+                    case 0:
+                        continue;
                 }
 
-                if (files.Length > 1)
-                {
-                    errorMessage = $"More than one matching file was found in directory '{directoryPath}'.";
-                    filePath = default;
-                    return false;
-                }
+                errorMessage = $"More than one matching file was found in directory '{directoryPath}'.";
+                filePath = default;
+                return false;
             }
 
             errorMessage = $"No project project file or solution was found in directory '{directoryPath}'.";

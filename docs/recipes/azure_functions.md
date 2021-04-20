@@ -4,18 +4,14 @@
 
 ## Getting Started: Create an Azure Function
 
-Starting from the [sample here](https://github.com/dotnet/tye/tree/master/samples/frontend-backend), we are going to transform the backend from a web application to an azure function app.
+Starting from the [sample here](https://github.com/dotnet/tye/tree/main/samples/frontend-backend), we are going to transform the backend from a web application to an azure function app.
 
 To start, create an Azure Function project in a folder called `backend-function`. You can do this via:
 - [Visual Studio Code](https://docs.microsoft.com/en-us/azure/azure-functions/functions-create-first-function-vs-code?pivots=programming-language-csharp)
 - [Visual Studio](https://docs.microsoft.com/en-us/azure/azure-functions/functions-create-your-first-function-visual-studio)
 - [Commandline](https://docs.microsoft.com/en-us/azure/azure-functions/functions-create-first-azure-function-azure-cli?tabs=bash%2Cbrowser&pivots=programming-language-csharp)
 
-Next, you must have the [Azure Functions Core Tools](https://docs.microsoft.com/en-us/azure/azure-functions/functions-run-local?tabs=windows%2Ccsharp%2Cbash) through npm. By default, if you created an azure function through VSCode or Commandline, you will already have installed it. Otherwise, you can install the core tools by running:
-
-```bash
-npm install -g azure-functions-core-tools@3
-```
+Next, you must have the [Azure Functions Core Tools](https://docs.microsoft.com/en-us/azure/azure-functions/functions-run-local?tabs=windows%2Ccsharp%2Cbash). You can install the core tools by installing the [standalone installer](https://docs.microsoft.com/en-us/azure/azure-functions/functions-run-local?tabs=windows%2Ccsharp%2Cbash#v2) or through [npm](https://www.npmjs.com/package/azure-functions-core-tools).
 
 You can also specify a path to func by specifying `pathToFunc` for the azure function service.
 
