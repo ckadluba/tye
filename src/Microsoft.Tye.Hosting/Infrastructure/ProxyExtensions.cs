@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
+using Microsoft.Net.Http.Headers;
 
 namespace Microsoft.AspNetCore.Proxy
 {
@@ -80,7 +81,16 @@ namespace Microsoft.AspNetCore.Proxy
             // Copy the request headers
             foreach (var header in request.Headers)
             {
-                if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()) && requestMessage.Content != null)
+                // taken from : https://github.com/microsoft/reverse-proxy/blob/main/src/ReverseProxy/Forwarder/RequestUtilities.cs#L283
+                // HttpClient wrongly uses comma (",") instead of semi-colon (";") as a separator for Cookie headers.
+                // To mitigate this, we concatenate them manually and put them back as a single header value.
+                // A multi-header cookie header is invalid, but we get one because of
+                // https://github.com/dotnet/aspnetcore/issues/26461
+                if (string.Equals(header.Key, HeaderNames.Cookie, StringComparison.OrdinalIgnoreCase))
+                {
+                    requestMessage.Headers.TryAddWithoutValidation(header.Key, string.Join("; ", header.Value.ToArray()));
+                }
+                else if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()) && requestMessage.Content != null)
                 {
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
                 }
@@ -88,9 +98,13 @@ namespace Microsoft.AspNetCore.Proxy
 
             // Append request forwarding headers
             requestMessage.Headers.TryAddWithoutValidation("Via", $"{context.Request.Protocol} Tye");
-            requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-For", context.Connection.RemoteIpAddress.ToString());
             requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-Proto", request.Scheme);
             requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-Host", request.Host.ToUriComponent());
+
+            if (context.Connection.RemoteIpAddress != null)
+            {
+                requestMessage.Headers.TryAddWithoutValidation("X-Forwarded-For", context.Connection.RemoteIpAddress.ToString());
+            }
 
             requestMessage.Headers.Host = uri.Authority;
             requestMessage.RequestUri = uri;
@@ -129,9 +143,13 @@ namespace Microsoft.AspNetCore.Proxy
             }
 
             AppendHeaderValue(client.Options, context.Request.Headers, "Via", context.Request.Protocol);
-            AppendHeaderValue(client.Options, context.Request.Headers, "X-Forwarded-For", context.Connection.RemoteIpAddress.ToString());
             AppendHeaderValue(client.Options, context.Request.Headers, "X-Forwarded-Proto", context.Request.Scheme);
             AppendHeaderValue(client.Options, context.Request.Headers, "X-Forwarded-Host", context.Request.Host.ToUriComponent());
+
+            if (context.Connection.RemoteIpAddress != null)
+            {
+                AppendHeaderValue(client.Options, context.Request.Headers, "X-Forwarded-For", context.Connection.RemoteIpAddress.ToString());
+            }
 
             try
             {
